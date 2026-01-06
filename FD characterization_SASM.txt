@@ -1,0 +1,275 @@
+FD characterization using the SASM approach
+
+#import the required libraries, open netcdf, and extract the variables 
+
+#import the libraries
+import xarray as xr
+import numpy as np 
+
+#import pentad average soil moisture data from 1981 till 2020 (40 years)
+# Define file path for the NetCDF file
+
+netcdf_file = "D:/1_FD_drivers/Data/6_soil_moisture/five_day_avg_SM.nc"
+
+# Open the NetCDF file and extract variable, time, latitude, and longitude information
+try:
+    with xr.open_dataset(netcdf_file) as ds:
+        soil_moisture = ds['swvl1'].values
+        time = ds['time'].values
+        lat = ds['latitude'].values
+        lon = ds['longitude'].values
+except KeyError as e:
+    raise RuntimeError(f"Error in reading data from the NetCDF file: {e}") from e
+except Exception as e:
+    raise RuntimeError("Error in opening or processing the NetCDF file") from e
+
+# At this point, `soil_moisture`, `time`, `lat`, and `lon` variables are ready to be used
+
+#create the time sequence using the pandas dataframe 
+import pandas as pd
+
+# Define the start date
+start_date = pd.to_datetime("1981-01-01")
+
+# Assuming 'time' is in days since the start_date
+dates = pd.date_range(start=start_date, periods=len(time), freq='5D')
+
+# Check the first few dates to confirm
+print(dates[:5])
+
+#Creating the dataframe with heads : Time  Soil_Moisture   Latitude  Longitude
+
+#import the required libraries 
+import numpy as np
+import pandas as pd
+import xarray as xr
+
+# Sample shape of soil_moisture
+time_dim, lat_dim, lon_dim = soil_moisture.shape
+
+# Flatten spatial dimensions
+soil_moisture_reshaped = soil_moisture.reshape(time_dim, lat_dim * lon_dim)
+
+# Create DataFrame from reshaped array
+df = pd.DataFrame(soil_moisture_reshaped)
+
+# Number of rows in DataFrame
+num_rows = df.shape[0]
+num_spatial_points = lat_dim * lon_dim
+
+# Validate
+print(f"Number of dates: {len(dates)}")
+print(f"Number of rows in DataFrame: {num_rows}")
+print(f"Number of spatial points: {num_spatial_points}")
+
+# Repeat dates correctly
+dates_repeated = np.repeat(dates, num_spatial_points)
+
+# Ensure the length matches the total number of cells in the DataFrame
+if len(dates_repeated) != df.size:
+    raise ValueError(f"Length of dates_repeated ({len(dates_repeated)}) does not match the total number of elements in DataFrame ({df.size})")
+
+# Flatten the DataFrame to match the flattened dates_repeated
+df_flat = df.values.flatten()
+
+# Add 'Time' column
+df_with_time = pd.DataFrame({
+    'Time': dates_repeated,
+    'Soil_Moisture': df_flat
+})
+
+# Extract actual latitude and longitude values from the dataset (assuming you have the dataset open)
+lat_values = ds['latitude'].values  # Extract actual latitude values
+lon_values = ds['longitude'].values  # Extract actual longitude values
+
+# Create a meshgrid of latitude and longitude values to match the flattened structure
+lat_grid, lon_grid = np.meshgrid(lat_values, lon_values, indexing='ij')
+
+# Flatten the latitude and longitude grids to match the flattened soil moisture data
+lat_flat = lat_grid.flatten()
+lon_flat = lon_grid.flatten()
+
+# Create a DataFrame for latitude and longitude values
+lat_lon_map = pd.DataFrame({
+    'Latitude': np.tile(lat_flat, time_dim),  # Repeat lat/lon values for each time step
+    'Longitude': np.tile(lon_flat, time_dim)
+})
+
+# Concatenate latitude, longitude, and soil moisture data with time
+df_long = pd.concat([df_with_time, lat_lon_map], axis=1)
+
+# Display the first few rows of the long-format DataFrame
+print(df_long.head())
+
+
+import pandas as pd
+import numpy as np
+
+# Rename columns for clarity
+df_long.rename(columns={'Latitude': 'lat', 'Longitude': 'lon', 'Soil_Moisture': 'soil_moisture'}, inplace=True)
+
+# Add day of year column
+df_long['day_of_year'] = df_long['Time'].dt.dayofyear
+
+# Calculate long-term mean
+long_term_mean = (df_long.groupby(['lat', 'lon', 'day_of_year'])
+                  .agg(mean_anomaly=('soil_moisture', 'mean'))
+                  .reset_index())
+
+# Calculate long-term standard deviation
+long_term_std = (df_long.groupby(['lat', 'lon', 'day_of_year'])
+                 .agg(std_anomaly=('soil_moisture', 'std'))
+                 .reset_index())
+
+# Merge mean and std with original data
+data = (df_long
+        .merge(long_term_mean, on=['lat', 'lon', 'day_of_year'], how='left')
+        .merge(long_term_std, on=['lat', 'lon', 'day_of_year'], how='left'))
+
+# Calculate standardized anomalies
+data['standardized_anomalies'] = (data['soil_moisture'] - data['mean_anomaly']) / data['std_anomaly']
+
+# Display the first few rows of the final DataFrame
+print(data.head())
+
+print("Long-term mean:")
+print(long_term_mean.head())
+
+print("Long-term std deviation:")
+print(long_term_std.head())
+
+print(df_long.columns)
+print(df_long.dtypes)
+
+print(df_long[['Time', 'day_of_year']].head())
+
+print("Unique lat values:", df_long['lat'].unique())
+print("Unique lon values:", df_long['lon'].unique())
+print("Unique day_of_year values:", df_long['day_of_year'].unique())
+
+print(df_long.head())
+
+import numpy as np
+import pandas as pd
+
+# Function to identify flash drought events
+def identify_flash_droughts_optimized(data):
+    # Initialize a new column to store flash drought events
+    data['flash_drought'] = 0  # Use 0 as the placeholder for no event
+    
+    # Sort by Time to ensure correct order across all data
+    data = data.sort_values(['lat', 'lon', 'Time']).reset_index(drop=True)
+    
+    # Use numpy arrays for fast processing
+    standardized_anomalies = data['standardized_anomalies'].values
+    latitudes = data['lat'].values
+    longitudes = data['lon'].values
+    times = data['Time'].values
+    
+    # Boolean mask to identify where the initial condition is met
+    initial_condition = (standardized_anomalies >= 0)
+    drought_condition = (standardized_anomalies <= -1)
+    
+    # Create an array to store the event ids
+    event_id = 1
+    event_ids = np.zeros_like(standardized_anomalies)
+    
+    # loop to identify the flash drought events
+    i = 0
+    while i < len(data) - 5:
+        if initial_condition[i] and drought_condition[i + 3] and drought_condition[i + 4] and drought_condition[i + 5]:
+            # Find the end of the event
+            for j in range(i + 6, len(data)):
+                if standardized_anomalies[j] > -1:
+                    event_ids[i:j+1] = event_id
+                    event_id += 1
+                    i = j  # Jump to the next index after the end of this event
+                    break
+        i += 1
+    
+    # Assign the event ids back to the dataframe
+    data['flash_drought'] = event_ids
+    
+    # Generate the event mapping with start and end dates and calculate intensity (max negative standardized anomaly)
+    event_mapping = {}
+    unique_events = np.unique(event_ids[event_ids > 0])
+    
+    for event in unique_events:
+        event_mask = event_ids == event
+        event_start_time = times[event_mask].min()
+        event_end_time = times[event_mask].max()
+        lat = latitudes[event_mask][0]
+        lon = longitudes[event_mask][0]
+        
+        # Calculate the maximum negative value (intensity) of standardized anomalies during the event
+        event_intensity = standardized_anomalies[event_mask].min()
+        
+        # Store the event information with intensity
+        event_mapping[(lat, lon, event)] = (event_start_time, event_end_time, event_intensity)
+    
+    return data, event_mapping
+
+# Example usage:
+# Assuming you already have a DataFrame 'data' with columns 'lat', 'lon', 'Time', and 'standardized_anomalies'
+data, event_mapping = identify_flash_droughts_optimized(data)
+
+# Extract unique lat-lon pairs
+unique_lat_lon = data[['lat', 'lon']].drop_duplicates()
+
+# Create a DataFrame including all lat-lon pairs, even those without a flash drought event
+event_dates = pd.DataFrame(
+    [(lat, lon, event_id, dates[0] if event_id > 0 else None, dates[1] if event_id > 0 else None, dates[2] if event_id > 0 else None) 
+     for lat, lon in zip(unique_lat_lon['lat'], unique_lat_lon['lon'])
+     for event_id, dates in [(0, (None, None, None))] + [(event_id, dates) for (ev_lat, ev_lon, event_id), dates in event_mapping.items() if ev_lat == lat and ev_lon == lon]],
+    columns=['lat', 'lon', 'flash_drought', 'start_date', 'end_date', 'intensity']
+)
+
+# Ensure 'start_date' and 'end_date' are datetime objects
+event_dates['start_date'] = pd.to_datetime(event_dates['start_date'])
+event_dates['end_date'] = pd.to_datetime(event_dates['end_date'])
+
+# Fill in any missing event data with NaN values
+event_dates.fillna(value={'flash_drought': 0, 'start_date': pd.NaT, 'end_date': pd.NaT, 'intensity': np.nan}, inplace=True)
+
+# Display the results
+print(event_dates)
+
+# Remove events with start date '1981-01-01' and end date '2021-01-01'
+event_dates_filtered = event_dates[~((event_dates['start_date'] == '1981-01-01') & (event_dates['end_date'] == '2021-01-01'))]
+
+# Display the filtered event_dates DataFrame
+print(event_dates_filtered)
+
+#MONTHLY AND SEASONAL AVERAGE
+
+import numpy as np
+import pandas as pd
+
+# Step 1: Calculate the duration for each event
+event_dates_filtered['duration'] = (event_dates_filtered['end_date'] - event_dates_filtered['start_date']).dt.days
+
+# Extract month from the event start date
+event_dates_filtered['month'] = event_dates_filtered['start_date'].dt.month
+
+# Step 2: Group by lat, lon, and month to calculate long-term monthly averages
+long_term_summary_matrix_monthly = event_dates_filtered.groupby(['lat', 'lon', 'month']).agg(
+    average_duration=('duration', 'mean'),      # Calculate long-term average duration per month
+    average_intensity=('intensity', 'mean'),    # Calculate long-term average intensity per month
+    total_frequency=('flash_drought', 'count')  # Count the total number of flash drought events across all years
+).reset_index()
+
+# Step 3: Identify lat-lon-month combinations where data exists
+existing_lat_lon_month = long_term_summary_matrix_monthly[['lat', 'lon', 'month']]
+
+# Step 4: Merge with the summary matrix (this step becomes unnecessary if you don't need combinations without data)
+
+# Step 5: Fill NaN values for locations where no events were found (fill after actual data is loaded)
+long_term_summary_matrix_monthly['average_duration'] = long_term_summary_matrix_monthly['average_duration'].fillna(0)
+long_term_summary_matrix_monthly['average_intensity'] = long_term_summary_matrix_monthly['average_intensity'].fillna(0)
+long_term_summary_matrix_monthly['total_frequency'] = long_term_summary_matrix_monthly['total_frequency'].fillna(0)
+
+# Step 6: Export the long-term monthly summary matrix to a CSV file
+output_file = 'D:/FD_Properties/V2/long_term_summary_matrix_monthly_filtered.csv'
+long_term_summary_matrix_monthly.to_csv(output_file, index=False)
+
+print(f"Long-term monthly summary matrix exported as '{output_file}'")
